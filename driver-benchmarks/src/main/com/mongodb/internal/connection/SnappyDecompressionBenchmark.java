@@ -29,12 +29,14 @@ import org.xerial.snappy.Snappy;
 import java.io.IOException;
 import java.nio.Buffer;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.Random;
 
 /** Decodes one raw wire payload into a caller-owned response buffer. */
 @State(Scope.Thread)
 public class SnappyDecompressionBenchmark {
-    @Param({"256", "512", "1024", "4096", "8192", "16384", "32768", "65536", "131072", "1048576"})
+    @Param({"0", "1", "7", "31", "127", "128", "256", "512", "1024", "4096", "8192", "16384", "32768", "65536",
+            "131072", "1048576", "4194304", "8388608"})
     private int size;
     @Param({"heap", "direct"})
     private String layout;
@@ -62,6 +64,12 @@ public class SnappyDecompressionBenchmark {
         ((Buffer) src).flip();
         input = new ByteBufNIO(src);
         output = new ByteBufNIO(allocate(size));
+        int decoded = decode();
+        byte[] result = new byte[size];
+        output.flip().get(result);
+        if (decoded != size || !Arrays.equals(data, result)) {
+            throw new IllegalStateException("Decompression fixture did not round-trip");
+        }
     }
 
     private ByteBuffer allocate(final int length) {
