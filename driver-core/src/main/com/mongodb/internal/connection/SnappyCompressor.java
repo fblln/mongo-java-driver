@@ -37,38 +37,15 @@ class SnappyCompressor extends Compressor {
         return 1;
     }
 
-    // the server does not support the framing format so SnappyFramedOutputStream can't be used.  The entire source message must first
-    // be copied into a single byte array.  For that reason the compress method defined in the base class can't be used.
+    // OP_COMPRESSED carries a raw Snappy block. Its encoder takes a contiguous range of bytes.
     @Override
     public void compress(final List<ByteBuf> source, final BsonOutput target) {
-        int uncompressedSize = getUncompressedSize(source);
-
-        byte[] singleByteArraySource = new byte[uncompressedSize];
-        copy(source, singleByteArraySource);
-
-        try {
-            byte[] out = new byte[Snappy.maxCompressedLength(uncompressedSize)];
-            int compressedSize = Snappy.compress(singleByteArraySource, 0, singleByteArraySource.length, out, 0);
-            target.writeBytes(out, 0, compressedSize);
+        try (CompressionBuffer input = CompressionBuffer.consume(source);
+                CompressionBuffer output = CompressionBuffer.allocate(Snappy.maxCompressedLength(input.length()))) {
+            int written = Snappy.compress(input.array(), input.offset(), input.length(), output.array(), output.offset());
+            target.writeBytes(output.array(), output.offset(), written);
         } catch (IOException e) {
             throw new MongoInternalException("Unexpected IOException", e);
-        }
-    }
-
-    private int getUncompressedSize(final List<ByteBuf> source) {
-        int uncompressedSize = 0;
-        for (ByteBuf cur : source) {
-            uncompressedSize += cur.remaining();
-        }
-        return uncompressedSize;
-    }
-
-    private void copy(final List<ByteBuf> source, final byte[] in) {
-        int offset = 0;
-        for (ByteBuf cur : source) {
-            int remaining = cur.remaining();
-            cur.get(in, offset, remaining);
-            offset += remaining;
         }
     }
 

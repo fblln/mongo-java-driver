@@ -16,17 +16,22 @@
 
 package com.mongodb.internal.connection;
 
+import com.github.luben.zstd.RecyclingBufferPool;
 import com.github.luben.zstd.Zstd;
 import com.github.luben.zstd.ZstdInputStreamNoFinalizer;
+import com.github.luben.zstd.ZstdOutputStreamNoFinalizer;
 import com.mongodb.MongoInternalException;
 import org.bson.ByteBuf;
 import org.bson.io.BsonOutput;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.List;
 
-class ZstdCompressor extends Compressor {
+class ZstdCompressor extends StreamingCompressor {
+    private static final int MAX_ONE_SHOT_SIZE = 8 * 1024;
+
     @Override
     public String getName() {
         return "zstd";
@@ -38,36 +43,29 @@ class ZstdCompressor extends Compressor {
     }
 
     @Override
-    public void compress(final List<ByteBuf> source, final BsonOutput target) {
-        int uncompressedSize = getUncompressedSize(source);
-
-        byte[] singleByteArraySource = new byte[uncompressedSize];
-        copy(source, singleByteArraySource);
-
-        try {
-            byte[] out = new byte[(int) Zstd.compressBound(uncompressedSize)];
-            int compressedSize = (int) Zstd.compress(out, singleByteArraySource, Zstd.defaultCompressionLevel());
-            target.writeBytes(out, 0, compressedSize);
+    void compress(final List<ByteBuf> source, final BsonOutput target) {
+        // Stream setup is expensive for short commands. Keep the temporary output small on the one-shot path.
+        int remainingBudget = MAX_ONE_SHOT_SIZE;
+        for (ByteBuf buffer : source) {
+            remainingBudget -= buffer.remaining();
+            if (remainingBudget < 0) {
+                super.compress(source, target);
+                return;
+            }
+        }
+        try (CompressionBuffer input = CompressionBuffer.consume(source)) {
+            byte[] output = new byte[(int) Zstd.compressBound(input.length())];
+            int written = (int) Zstd.compressByteArray(output, 0, output.length, input.array(), input.offset(), input.length(),
+                    Zstd.defaultCompressionLevel());
+            target.writeBytes(output, 0, written);
         } catch (Exception e) {
             throw new MongoInternalException("Unexpected exception", e);
         }
     }
 
-    private int getUncompressedSize(final List<ByteBuf> source) {
-        int uncompressedSize = 0;
-        for (ByteBuf cur : source) {
-            uncompressedSize += cur.remaining();
-        }
-        return uncompressedSize;
-    }
-
-    private void copy(final List<ByteBuf> source, final byte[] in) {
-        int offset = 0;
-        for (ByteBuf cur : source) {
-            int remaining = cur.remaining();
-            cur.get(in, offset, remaining);
-            offset += remaining;
-        }
+    @Override
+    OutputStream getOutputStream(final OutputStream target) throws IOException {
+        return new ZstdOutputStreamNoFinalizer(target, RecyclingBufferPool.INSTANCE);
     }
 
     @Override
