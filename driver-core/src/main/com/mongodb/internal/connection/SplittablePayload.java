@@ -143,6 +143,10 @@ public final class SplittablePayload extends MessageSequences {
         return insertedIds;
     }
 
+    void encodeAt(final int index, final BsonWriter writer, final EncoderContext context) {
+        writeRequestEncoder.encode(writer, writeRequestWithIndexes.get(index), context);
+    }
+
     /**
      * @return the payload
      */
