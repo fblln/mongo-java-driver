@@ -25,8 +25,18 @@ import org.xerial.snappy.SnappyInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 class SnappyCompressor extends Compressor {
+    private static final int MIN_WORKSPACE_INPUT = 4 * 1024;
+    private static final int MAX_WORKSPACE_INPUT = 64 * 1024;
+    private final AtomicReference<Workspace> idleWorkspace = new AtomicReference<>();
+
+    private static final class Workspace {
+        private final byte[] input = new byte[MAX_WORKSPACE_INPUT];
+        private final byte[] output = new byte[Snappy.maxCompressedLength(MAX_WORKSPACE_INPUT)];
+    }
+
     @Override
     public String getName() {
         return "snappy";
@@ -40,26 +50,37 @@ class SnappyCompressor extends Compressor {
     // OP_COMPRESSED carries a single raw Snappy block.
     @Override
     public void compress(final List<ByteBuf> source, final BsonOutput target) {
-        if (source.size() == 1 && source.get(0).isBackedByArray()) {
-            ByteBuf buffer = source.get(0);
-            int offset = buffer.arrayOffset() + buffer.position();
-            int length = buffer.remaining();
-            buffer.position(buffer.limit());
-            compress(buffer.array(), offset, length, target);
-        } else {
-            byte[] input = new byte[getUncompressedSize(source)];
-            copy(source, input);
-            compress(input, 0, input.length, target);
+        int length = source.size() == 1 ? source.get(0).remaining() : getUncompressedSize(source);
+        Workspace workspace = null;
+        if (length >= MIN_WORKSPACE_INPUT && length <= MAX_WORKSPACE_INPUT) {
+            workspace = idleWorkspace.getAndSet(null);
+            if (workspace == null) {
+                workspace = new Workspace();
+            }
         }
-    }
-
-    private static void compress(final byte[] input, final int offset, final int length, final BsonOutput target) {
         try {
-            byte[] output = new byte[Snappy.maxCompressedLength(length)];
+            byte[] input;
+            int offset;
+            if (source.size() == 1 && source.get(0).isBackedByArray()) {
+                ByteBuf buffer = source.get(0);
+                input = buffer.array();
+                offset = buffer.arrayOffset() + buffer.position();
+                buffer.position(buffer.limit());
+            } else {
+                input = workspace == null ? new byte[length] : workspace.input;
+                offset = 0;
+                copy(source, input);
+            }
+            byte[] output = workspace == null ? new byte[Snappy.maxCompressedLength(length)] : workspace.output;
             int written = Snappy.compress(input, offset, length, output, 0);
             target.writeBytes(output, 0, written);
         } catch (IOException e) {
             throw new MongoInternalException("Unexpected IOException", e);
+        } finally {
+            if (workspace != null) {
+                // writeBytes has copied the result; another operation can now claim these arrays.
+                idleWorkspace.compareAndSet(null, workspace);
+            }
         }
     }
 
