@@ -47,39 +47,38 @@ class SnappyCompressor extends Compressor {
     @Override
     public void compress(final List<ByteBuf> source, final BsonOutput target) {
         try {
-            if (source.size() == 1) {
+            if (source.size() == 1 && source.get(0).isBackedByArray()) {
                 ByteBuf buffer = source.get(0);
-                if (buffer.isBackedByArray()) {
-                    int offset = buffer.arrayOffset() + buffer.position();
-                    int length = buffer.remaining();
-                    buffer.position(buffer.limit());
-                    compress(buffer.array(), offset, length, target);
-                    return;
-                }
+                int offset = buffer.arrayOffset() + buffer.position();
+                int length = buffer.remaining();
+                buffer.position(buffer.limit());
+                compress(buffer.array(), offset, length, target);
+                return;
             }
-            int size = getUncompressedSize(source);
-            BufferPool pool = scratchPool(size);
-            byte[] input = pool.allocateArray(size);
+            int uncompressedSize = getUncompressedSize(source);
+            BufferPool pool = scratchPool(uncompressedSize);
+            byte[] singleByteArraySource = pool.allocateArray(uncompressedSize);
             try {
-                consumeIntoArray(source, input);
-                compress(input, 0, size, target);
+                copy(source, singleByteArraySource);
+                compress(singleByteArraySource, 0, uncompressedSize, target);
             } finally {
-                pool.releaseArray(input);
+                pool.releaseArray(singleByteArraySource);
             }
         } catch (IOException e) {
             throw new MongoInternalException("Unexpected IOException", e);
         }
     }
 
-    private static void compress(final byte[] input, final int offset, final int length, final BsonOutput target) throws IOException {
-        int bound = Snappy.maxCompressedLength(length);
+    private static void compress(final byte[] singleByteArraySource, final int offset, final int uncompressedSize,
+                                 final BsonOutput target) throws IOException {
+        int bound = Snappy.maxCompressedLength(uncompressedSize);
         BufferPool pool = scratchPool(bound);
-        byte[] output = pool.allocateArray(bound);
+        byte[] out = pool.allocateArray(bound);
         try {
-            int written = Snappy.compress(input, offset, length, output, 0);
-            target.writeBytes(output, 0, written);
+            int compressedSize = Snappy.compress(singleByteArraySource, offset, uncompressedSize, out, 0);
+            target.writeBytes(out, 0, compressedSize);
         } finally {
-            pool.releaseArray(output);
+            pool.releaseArray(out);
         }
     }
 
@@ -88,7 +87,7 @@ class SnappyCompressor extends Compressor {
         return size >= 4096 && size <= MAX_CACHED_SCRATCH_SIZE ? DefaultPoolFactory.getDefaultPool() : QuiescentBufferPool.getInstance();
     }
 
-    private static int getUncompressedSize(final List<ByteBuf> source) {
+    private int getUncompressedSize(final List<ByteBuf> source) {
         int uncompressedSize = 0;
         for (ByteBuf cur : source) {
             uncompressedSize += cur.remaining();
@@ -96,7 +95,7 @@ class SnappyCompressor extends Compressor {
         return uncompressedSize;
     }
 
-    private static void consumeIntoArray(final List<ByteBuf> source, final byte[] in) {
+    private void copy(final List<ByteBuf> source, final byte[] in) {
         int offset = 0;
         for (ByteBuf cur : source) {
             int remaining = cur.remaining();
