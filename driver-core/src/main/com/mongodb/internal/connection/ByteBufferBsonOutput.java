@@ -69,6 +69,54 @@ public class ByteBufferBsonOutput extends OutputBuffer {
         return new ByteBufferBsonOutput.Branch(this);
     }
 
+    @FunctionalInterface
+    interface ContiguousWriter {
+        // Return the number of bytes written, or -1 if the buffer layout is unsupported.
+        int write(ByteBuf destination) throws IOException;
+    }
+
+    // Keep the writable buffer owned by this output until close, including while an async send is pending.
+    boolean tryWriteContiguous(final int bound, final boolean arrayBacked, final ContiguousWriter writer) throws IOException {
+        ensureOpen();
+        if (bound > MAX_BUFFER_SIZE) {
+            return false;
+        }
+        ByteBuf current = getCurrentByteBuffer();
+        if (current.isBackedByArray() != arrayBacked) {
+            return false;
+        }
+        boolean separate = current.remaining() < bound;
+        // Avoid keeping the worst-case size of a large compressed message alive through an async send.
+        if (separate && bound > 64 * 1024) {
+            return false;
+        }
+        ByteBuf destination = separate ? bufferProvider.getBuffer(bound) : current;
+        boolean attached = false;
+        try {
+            if (destination.remaining() < bound || destination.isBackedByArray() != arrayBacked) {
+                return false;
+            }
+            int written = writer.write(destination);
+            if (written < 0) {
+                return false;
+            }
+            assertTrue(written <= bound);
+            destination.position(destination.position() + written);
+            if (separate) {
+                bufferList.add(destination);
+                curBufferIndex = bufferList.size() - 1;
+                currentByteBuffer = destination;
+                attached = true;
+            }
+            position += written;
+            return true;
+        } finally {
+            if (separate && !attached) {
+                destination.release();
+            }
+        }
+    }
+
     @Override
     public void writeBytes(final byte[] bytes, final int offset, final int length) {
         ensureOpen();
