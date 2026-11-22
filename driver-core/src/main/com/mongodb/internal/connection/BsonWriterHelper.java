@@ -22,7 +22,6 @@ import com.mongodb.lang.Nullable;
 import org.bson.BsonBinaryWriter;
 import org.bson.BsonBinaryWriterSettings;
 import org.bson.BsonContextType;
-import org.bson.BsonDocument;
 import org.bson.BsonElement;
 import org.bson.BsonMaximumSizeExceededException;
 import org.bson.BsonValue;
