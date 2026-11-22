@@ -47,17 +47,18 @@ class SnappyCompressor extends Compressor {
             buffer.position(buffer.limit());
             compress(buffer.array(), offset, length, target);
         } else {
-            byte[] input = new byte[getUncompressedSize(source)];
-            copy(source, input);
-            compress(input, 0, input.length, target);
+            int uncompressedSize = getUncompressedSize(source);
+            byte[] singleByteArraySource = new byte[uncompressedSize];
+            copy(source, singleByteArraySource);
+            compress(singleByteArraySource, 0, uncompressedSize, target);
         }
     }
 
-    private static void compress(final byte[] input, final int offset, final int length, final BsonOutput target) {
+    private static void compress(final byte[] singleByteArraySource, final int offset, final int uncompressedSize, final BsonOutput target) {
         try {
-            byte[] output = new byte[Snappy.maxCompressedLength(length)];
-            int written = Snappy.compress(input, offset, length, output, 0);
-            target.writeBytes(output, 0, written);
+            byte[] out = new byte[Snappy.maxCompressedLength(uncompressedSize)];
+            int compressedSize = Snappy.compress(singleByteArraySource, offset, uncompressedSize, out, 0);
+            target.writeBytes(out, 0, compressedSize);
         } catch (IOException e) {
             throw new MongoInternalException("Unexpected IOException", e);
         }
