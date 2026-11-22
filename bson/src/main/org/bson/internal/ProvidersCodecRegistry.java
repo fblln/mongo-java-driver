@@ -46,8 +46,7 @@ public final class ProvidersCodecRegistry implements CycleDetectingCodecRegistry
 
     @Override
     public <T> Codec<T> get(final Class<T> clazz) {
-        Codec<T> cached = codecCache.get(clazz, null);
-        return cached != null ? cached : resolve(new ChildCodecRegistry<>(this, clazz, null));
+        return get(new ChildCodecRegistry<>(this, clazz, null));
     }
 
     @Override
@@ -76,20 +75,16 @@ public final class ProvidersCodecRegistry implements CycleDetectingCodecRegistry
     }
 
     public <T> Codec<T> get(final ChildCodecRegistry<T> context) {
-        Codec<T> cached = codecCache.get(context.getCodecClass(), context.getTypes());
-        return cached != null ? cached : resolve(context);
-    }
-
-    private <T> Codec<T> resolve(final ChildCodecRegistry<T> context) {
-        Class<T> clazz = context.getCodecClass();
-        List<Type> types = context.getTypes();
-        for (CodecProvider provider : codecProviders) {
-            Codec<T> codec = provider.get(clazz, types == null ? emptyList() : types, context);
-            if (codec != null) {
-                return codecCache.putIfAbsent(clazz, types, codec);
+        CodecCacheKey codecCacheKey = new CodecCacheKey(context.getCodecClass(), context.getTypes().orElse(null));
+        return codecCache.<T>get(codecCacheKey).orElseGet(() -> {
+            for (CodecProvider provider : codecProviders) {
+                Codec<T> codec = provider.get(context.getCodecClass(), context.getTypes().orElse(emptyList()), context);
+                if (codec != null) {
+                    return codecCache.putIfAbsent(codecCacheKey, codec);
+                }
             }
-        }
-        throw new CodecConfigurationException(format("Can't find a codec for %s.", new CodecCacheKey(clazz, types)));
+            throw new CodecConfigurationException(format("Can't find a codec for %s.", codecCacheKey));
+        });
     }
 
     @Override

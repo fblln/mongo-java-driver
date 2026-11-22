@@ -26,39 +26,39 @@ class CodecCacheSpecification extends Specification {
         when:
         def codec = new MinKeyCodec()
         def cache = new CodecCache()
-        cache.putIfAbsent(MinKey, null, codec)
+        def cacheKey = new CodecCache.CodecCacheKey(MinKey, null)
+        cache.putIfAbsent(cacheKey, codec)
 
         then:
-        cache.get(MinKey, null).is(codec)
-        cache.get(MinKey, []) == null
+        cache.get(cacheKey).get().is(codec)
     }
 
     def 'should return empty if codec for class does not exist'() {
         when:
         def cache = new CodecCache()
+        def cacheKey = new CodecCache.CodecCacheKey(MinKey, null)
 
         then:
-        cache.get(MinKey, null) == null
+        !cache.get(cacheKey).isPresent()
     }
 
     def 'should return the cached codec if a codec for the parameterized class exists'() {
         when:
         def codec = new MinKeyCodec()
         def cache = new CodecCache()
-        cache.putIfAbsent(List, [Integer], codec)
+        def cacheKey = new CodecCache.CodecCacheKey(List, [Integer])
+        cache.putIfAbsent(cacheKey, codec)
 
         then:
-        cache.get(List, [Integer]).is(codec)
-        cache.get(List, null) == null
-        cache.get(List, []) == null
-        cache.get(List, [String]) == null
+        cache.get(cacheKey).get().is(codec)
     }
 
     def 'should return empty if codec for the parameterized class does not exist'() {
         when:
         def cache = new CodecCache()
+        def cacheKey = new CodecCache.CodecCacheKey(List, [Integer])
 
         then:
-        cache.get(List, [Integer]) == null
+        !cache.get(cacheKey).isPresent()
     }
 }

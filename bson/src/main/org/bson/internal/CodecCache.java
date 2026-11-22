@@ -21,6 +21,7 @@ import org.bson.codecs.Codec;
 import java.lang.reflect.Type;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -63,22 +64,18 @@ final class CodecCache {
         }
     }
 
-    // Untyped lookups can use the Class itself. Preserve the distinction between missing and explicit type arguments.
-    private final ConcurrentMap<Object, Codec<?>> codecs = new ConcurrentHashMap<>();
+    private final ConcurrentMap<CodecCacheKey, Codec<?>> codecCache = new ConcurrentHashMap<>();
 
-    <T> Codec<T> putIfAbsent(final Class<T> clazz, final List<Type> types, final Codec<T> codec) {
+    public <T> Codec<T> putIfAbsent(final CodecCacheKey codecCacheKey, final Codec<T> codec) {
         assertNotNull(codec);
         @SuppressWarnings("unchecked")
-        Codec<T> previous = (Codec<T>) codecs.putIfAbsent(key(clazz, types), codec);
-        return previous == null ? codec : previous;
+        Codec<T> prevCodec = (Codec<T>) codecCache.putIfAbsent(codecCacheKey, codec);
+        return prevCodec == null ? codec : prevCodec;
     }
 
-    @SuppressWarnings("unchecked")
-    <T> Codec<T> get(final Class<T> clazz, final List<Type> types) {
-        return (Codec<T>) codecs.get(key(clazz, types));
-    }
-
-    private static Object key(final Class<?> clazz, final List<Type> types) {
-        return types == null ? clazz : new CodecCacheKey(clazz, types);
+    public <T> Optional<Codec<T>> get(final CodecCacheKey codecCacheKey) {
+        @SuppressWarnings("unchecked")
+        Codec<T> codec = (Codec<T>) codecCache.get(codecCacheKey);
+        return Optional.ofNullable(codec);
     }
 }

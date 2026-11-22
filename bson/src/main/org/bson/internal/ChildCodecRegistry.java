@@ -24,6 +24,7 @@ import java.lang.reflect.Type;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 import static java.lang.String.format;
 import static org.bson.assertions.Assertions.isTrueArgument;
@@ -55,8 +56,8 @@ class ChildCodecRegistry<T> implements CodecRegistry {
         return codecClass;
     }
 
-    List<Type> getTypes() {
-        return types;
+    public Optional<List<Type>> getTypes() {
+        return Optional.ofNullable(types);
     }
 
     // Gets a Codec, but if it detects a cyclic dependency, return a LazyCodec which breaks the chain.

@@ -173,12 +173,12 @@ public final class BulkWriteBatch {
         SessionContext sessionContext = operationContext.getSessionContext();
         if (!payloadItems.isEmpty()) {
             command.put(getCommandName(batchType), new BsonString(namespace.getCollectionName()));
-            command.put("ordered", BsonBoolean.valueOf(ordered));
+            command.put("ordered", new BsonBoolean(ordered));
             commandWriteConcern(writeConcern, sessionContext).ifPresent(value ->
                     command.put("writeConcern", value.asDocument()));
             appendReadConcernToWriteCommand(sessionContext, command);
             if (bypassDocumentValidation != null) {
-                command.put("bypassDocumentValidation", BsonBoolean.valueOf(bypassDocumentValidation));
+                command.put("bypassDocumentValidation", new BsonBoolean(bypassDocumentValidation));
             }
             putIfNotNull(command, "comment", comment);
             putIfNotNull(command, "let", variables);

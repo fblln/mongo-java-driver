@@ -22,6 +22,7 @@ import com.mongodb.lang.Nullable;
 import org.bson.BsonBinaryWriter;
 import org.bson.BsonBinaryWriterSettings;
 import org.bson.BsonContextType;
+import org.bson.BsonDocument;
 import org.bson.BsonElement;
 import org.bson.BsonMaximumSizeExceededException;
 import org.bson.BsonValue;
@@ -78,8 +79,9 @@ public final class BsonWriterHelper {
     static void writePayload(final BsonWriter writer, final BsonOutput bsonOutput, final MessageSettings settings,
                              final int messageStartPosition, final SplittablePayload payload, final int maxSplittableDocumentSize) {
         MessageSettings payloadSettings = getPayloadMessageSettings(payload.getPayloadType(), settings);
-        for (int i = 0; i < payload.size(); i++) {
-            if (writeDocument(writer, bsonOutput, payloadSettings, payload, messageStartPosition, i + 1,
+        List<BsonDocument> payloadDocuments = payload.getPayload();
+        for (int i = 0; i < payloadDocuments.size(); i++) {
+            if (writeDocument(writer, bsonOutput, payloadSettings, payloadDocuments.get(i), messageStartPosition, i + 1,
                     maxSplittableDocumentSize)) {
                 payload.setPosition(i + 1);
             } else {
@@ -164,10 +166,10 @@ public final class BsonWriterHelper {
     }
 
     private static boolean writeDocument(final BsonWriter writer, final BsonOutput bsonOutput, final MessageSettings settings,
-                                         final SplittablePayload payload, final int messageStartPosition, final int batchItemCount,
+                                         final BsonDocument document, final int messageStartPosition, final int batchItemCount,
                                          final int maxSplittableDocumentSize) {
         int currentPosition = bsonOutput.getPosition();
-        payload.encodeAt(batchItemCount - 1, writer, ENCODER_CONTEXT);
+        encodeUsingRegistry(writer, document);
         int messageSize = bsonOutput.getPosition() - messageStartPosition;
         int documentSize = bsonOutput.getPosition() - currentPosition;
         if (exceedsLimits(settings, messageSize, documentSize, batchItemCount)

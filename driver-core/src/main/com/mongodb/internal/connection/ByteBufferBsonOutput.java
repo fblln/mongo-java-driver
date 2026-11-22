@@ -162,14 +162,6 @@ public class ByteBufferBsonOutput extends OutputBuffer {
                     absolutePosition + 3));
         }
 
-        if (currentByteBuffer != null) {
-            int bufferStart = position - currentByteBuffer.position();
-            if (absolutePosition >= bufferStart) {
-                currentByteBuffer.putInt(absolutePosition - bufferStart, value);
-                return;
-            }
-        }
-
         BufferPositionPair bufferPositionPair = getBufferPositionPair(absolutePosition);
         ByteBuf byteBuffer = getByteBufferAtIndex(bufferPositionPair.bufferIndex);
         int capacity = byteBuffer.position() - bufferPositionPair.position;
