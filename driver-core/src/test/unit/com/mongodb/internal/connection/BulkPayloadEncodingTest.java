@@ -17,10 +17,13 @@
 package com.mongodb.internal.connection;
 
 import com.mongodb.internal.bulk.InsertRequest;
+import com.mongodb.internal.bulk.UpdateRequest;
+import com.mongodb.internal.bulk.WriteRequest;
 import com.mongodb.internal.bulk.WriteRequestWithIndex;
 import com.mongodb.internal.validator.NoOpFieldNameValidator;
 import org.bson.BsonBinaryWriter;
 import org.bson.BsonDocument;
+import org.bson.BsonNull;
 import org.bson.BsonValue;
 import org.bson.RawBsonDocument;
 import org.bson.io.BasicOutputBuffer;
@@ -29,10 +32,12 @@ import org.junit.jupiter.api.Test;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Arrays;
+import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class BulkPayloadEncodingTest {
     @Test
@@ -51,6 +56,33 @@ class BulkPayloadEncodingTest {
         assertNotNull(secondId);
         assertEquals(secondId, remaining.getInsertedIds().get(7));
         assertNotEquals(firstId, secondId);
+    }
+
+    @Test
+    void preservesAnExplicitNullIdOnRetry() {
+        SplittablePayload payload = new SplittablePayload(SplittablePayload.Type.INSERT, Collections.singletonList(
+                new WriteRequestWithIndex(new InsertRequest(new BsonDocument("_id", BsonNull.VALUE)), 2)),
+                true, NoOpFieldNameValidator.INSTANCE);
+        assertEquals(BsonNull.VALUE, encodeOne(payload).get("_id"));
+        assertEquals(BsonNull.VALUE, encodeOne(payload).get("_id"));
+        assertEquals(BsonNull.VALUE, payload.getInsertedIds().get(2));
+    }
+
+    @Test
+    void allowsAnEmptyReplacementAndRejectsAnEmptyUpdate() {
+        BsonDocument filter = BsonDocument.parse("{key: 1}");
+        BsonDocument empty = new BsonDocument();
+        for (WriteRequest.Type type : Arrays.asList(WriteRequest.Type.REPLACE, WriteRequest.Type.UPDATE)) {
+            SplittablePayload payload = new SplittablePayload(SplittablePayload.Type.valueOf(type.name()), Collections.singletonList(
+                    new WriteRequestWithIndex(new UpdateRequest(filter, empty, type), 0)), true, NoOpFieldNameValidator.INSTANCE);
+            if (type == WriteRequest.Type.REPLACE) {
+                BsonDocument command = encodeOne(payload);
+                assertEquals(filter, command.getDocument("q"));
+                assertEquals(empty, command.getDocument("u"));
+            } else {
+                assertThrows(IllegalArgumentException.class, () -> encodeOne(payload));
+            }
+        }
     }
 
     private static BsonDocument encodeOne(final SplittablePayload payload) {
