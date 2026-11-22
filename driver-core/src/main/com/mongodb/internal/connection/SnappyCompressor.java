@@ -58,10 +58,6 @@ class SnappyCompressor extends Compressor {
                     compress(buffer.array(), offset, length, target);
                     return;
                 }
-                if (target instanceof ByteBufferBsonOutput && tryCompressDirect(buffer, (ByteBufferBsonOutput) target)) {
-                    buffer.position(buffer.limit());
-                    return;
-                }
             }
             int size = getUncompressedSize(source);
             BufferPool pool = scratchPool(size);
@@ -77,31 +73,8 @@ class SnappyCompressor extends Compressor {
         }
     }
 
-    private static boolean tryCompressDirect(final ByteBuf source, final ByteBufferBsonOutput target) throws IOException {
-        ByteBuffer input = source.asNIO();
-        if (!input.isDirect()) {
-            return false;
-        }
-        int bound = Snappy.maxCompressedLength(input.remaining());
-        return target.tryWriteContiguous(bound, false, dst -> {
-            if (dst instanceof NettyByteBuf && ((NettyByteBuf) dst).asByteBuf().nioBufferCount() != 1) {
-                return -1;
-            }
-            ByteBuffer output = dst.asNIO().duplicate();
-            if (!output.isDirect() || output.isReadOnly() || output.remaining() < bound) {
-                return -1;
-            }
-            // Xerial sets the output view's limit. The BSON writer commits the returned byte count.
-            return Snappy.compress(input.duplicate(), output);
-        });
-    }
-
     private static void compress(final byte[] input, final int offset, final int length, final BsonOutput target) throws IOException {
         int bound = Snappy.maxCompressedLength(length);
-        if (target instanceof ByteBufferBsonOutput && ((ByteBufferBsonOutput) target).tryWriteContiguous(bound, true,
-                dst -> Snappy.compress(input, offset, length, dst.array(), dst.arrayOffset() + dst.position()))) {
-            return;
-        }
         BufferPool pool = scratchPool(bound);
         byte[] output = pool.allocateArray(bound);
         try {
