@@ -25,7 +25,7 @@ import java.util.zip.Deflater;
 import java.util.zip.DeflaterOutputStream;
 import java.util.zip.InflaterInputStream;
 
-class ZlibCompressor extends Compressor {
+class ZlibCompressor extends StreamingCompressor {
     private final int level;
 
     ZlibCompressor(final MongoCompressor mongoCompressor) {

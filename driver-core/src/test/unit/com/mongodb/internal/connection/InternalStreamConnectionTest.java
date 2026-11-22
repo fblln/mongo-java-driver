@@ -47,6 +47,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.xerial.snappy.Snappy;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -1196,16 +1197,71 @@ class InternalStreamConnectionTest {
         assertFalse(stream.hadUnexpectedCall());
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void decodesASnappyReplyIntoBson(final boolean async) throws IOException {
+        BsonDocument expected = new BsonDocument("ok", new BsonInt32(1)).append("value", new BsonString("compressed reply"));
+        ByteBuf reply = createResponseBody(expected);
+        byte[] plain = new byte[reply.remaining()];
+        try {
+            reply.get(plain);
+        } finally {
+            reply.release();
+        }
+        byte[] compressed = Snappy.compress(plain);
+        ByteBuffer wire = ByteBuffer.allocate(CompressedHeader.COMPRESSED_HEADER_LENGTH + compressed.length).order(ByteOrder.LITTLE_ENDIAN);
+        wire.putInt(OpCode.OP_REPLY.getValue()).putInt(plain.length).put((byte) 1).put(compressed);
+        ((Buffer) wire).flip();
+        ByteBuf body = new ByteBufNIO(wire);
+        TestStream stream = new TestStream() {
+            private boolean sentHeader;
+
+            @Override
+            public ByteBuf read(final int numBytes, final OperationContext operationContext) {
+                if (sentHeader) {
+                    return body;
+                }
+                sentHeader = true;
+                return createCompressedResponseHeader(getCommandMessageId(), body.remaining());
+            }
+
+            @Override
+            public void readAsync(final int numBytes, final OperationContext operationContext,
+                    final AsyncCompletionHandler<ByteBuf> handler) {
+                handler.completed(read(numBytes, operationContext));
+            }
+        };
+        InternalStreamConnection connection = createOpenConnection(stream, null,
+                Collections.singletonList(MongoCompressor.createSnappyCompressor()));
+        try {
+            CommandMessage message = createPingCommand();
+            stream.setCommandMessageId(message.getId());
+            BsonDocument actual;
+            if (async) {
+                FutureResultCallback<BsonDocument> callback = new FutureResultCallback<>();
+                connection.sendAndReceiveAsync(message, new BsonDocumentCodec(), createOperationContext(), callback);
+                actual = callback.get(5, TimeUnit.SECONDS);
+            } else {
+                actual = connection.sendAndReceive(message, new BsonDocumentCodec(), createOperationContext());
+            }
+            assertEquals(expected, actual);
+            assertEquals(0, body.getReferenceCount());
+        } finally {
+            connection.close();
+        }
+    }
+
     /**
      * Verifies that in the synchronous path, the uncompressed buffer allocated for an OP_COMPRESSED
      * response is released when reply header parsing fails after decompression.
      */
-    @Test
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
     @DisplayName("Sync: uncompressed buffer released when reply header parsing fails for compressed response")
-    void syncReleasesUncompressedBufferWhenReplyHeaderParsingFails() {
+    void syncReleasesUncompressedBufferWhenReplyHeaderParsingFails(final boolean snappy) throws IOException {
         AtomicInteger readCallCount = new AtomicInteger();
         List<ByteBuf> allocatedBuffers = new ArrayList<>();
-        ByteBuf compressedBody = createCompressedResponseBodyWithInvalidReplyHeader();
+        ByteBuf compressedBody = createCompressedResponseBodyWithInvalidReplyHeader(snappy);
         int compressedBodyLength = compressedBody.remaining();
 
         TestStream stream = new TestStream() {
@@ -1227,7 +1283,7 @@ class InternalStreamConnectionTest {
         };
 
         InternalStreamConnection connection = createOpenConnection(stream, null,
-                Collections.singletonList(MongoCompressor.createZlibCompressor()));
+                Collections.singletonList(snappy ? MongoCompressor.createSnappyCompressor() : MongoCompressor.createZlibCompressor()));
         CommandMessage commandMessage = createPingCommand();
         stream.setCommandMessageId(commandMessage.getId());
 
@@ -1236,6 +1292,7 @@ class InternalStreamConnectionTest {
         assertTrue(thrown.getMessage().contains("number of returned documents"));
         assertTrue(connection.isClosed(),
                 "Connection should be closed after reply header parsing failure");
+        assertEquals(0, compressedBody.getReferenceCount());
         for (ByteBuf buffer : allocatedBuffers) {
             assertEquals(0, buffer.getReferenceCount(),
                     "Every buffer handed out by the stream must be released after the failure");
@@ -1247,12 +1304,13 @@ class InternalStreamConnectionTest {
      * Verifies that in the asynchronous path, the uncompressed buffer allocated for an OP_COMPRESSED
      * response is released when reply header parsing fails after decompression.
      */
-    @Test
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
     @DisplayName("Async: uncompressed buffer released when reply header parsing fails for compressed response")
-    void asyncReleasesUncompressedBufferWhenReplyHeaderParsingFails() {
+    void asyncReleasesUncompressedBufferWhenReplyHeaderParsingFails(final boolean snappy) throws IOException {
         AtomicInteger readAsyncCallCount = new AtomicInteger();
         List<ByteBuf> allocatedBuffers = new ArrayList<>();
-        ByteBuf compressedBody = createCompressedResponseBodyWithInvalidReplyHeader();
+        ByteBuf compressedBody = createCompressedResponseBodyWithInvalidReplyHeader(snappy);
         int compressedBodyLength = compressedBody.remaining();
 
         TestStream stream = new TestStream() {
@@ -1275,7 +1333,7 @@ class InternalStreamConnectionTest {
         };
 
         InternalStreamConnection connection = createOpenConnection(stream, null,
-                Collections.singletonList(MongoCompressor.createZlibCompressor()));
+                Collections.singletonList(snappy ? MongoCompressor.createSnappyCompressor() : MongoCompressor.createZlibCompressor()));
         CommandMessage commandMessage = createPingCommand();
         stream.setCommandMessageId(commandMessage.getId());
 
@@ -1286,6 +1344,7 @@ class InternalStreamConnectionTest {
         assertTrue(thrown.getMessage().contains("number of returned documents"));
         assertTrue(connection.isClosed(),
                 "Connection should be closed after reply header parsing failure");
+        assertEquals(0, compressedBody.getReferenceCount());
         for (ByteBuf buffer : allocatedBuffers) {
             assertEquals(0, buffer.getReferenceCount(),
                     "Every buffer handed out by the stream must be released after the failure");
@@ -1540,11 +1599,11 @@ class InternalStreamConnectionTest {
     private static final int UNCOMPRESSED_REPLY_HEADER_LENGTH = 20;
 
     /**
-     * Creates an OP_COMPRESSED response body whose zlib-compressed payload uncompresses to an
+     * Creates an OP_COMPRESSED response body whose compressed payload uncompresses to an
      * invalid OP_REPLY header: numberReturned is 2 where 1 is required, so reply header parsing
      * fails after the uncompressed buffer was allocated.
      */
-    private static ByteBuf createCompressedResponseBodyWithInvalidReplyHeader() {
+    private static ByteBuf createCompressedResponseBodyWithInvalidReplyHeader(final boolean snappy) throws IOException {
         ByteBuffer uncompressed = ByteBuffer.allocate(UNCOMPRESSED_REPLY_HEADER_LENGTH);
         uncompressed.order(ByteOrder.LITTLE_ENDIAN);
         uncompressed.putInt(0);     // responseFlags
@@ -1552,13 +1611,13 @@ class InternalStreamConnectionTest {
         uncompressed.putInt(0);     // startingFrom
         uncompressed.putInt(2);     // numberReturned (invalid: must be 1)
 
-        byte[] compressed = zlibCompress(uncompressed.array());
+        byte[] compressed = snappy ? Snappy.compress(uncompressed.array()) : zlibCompress(uncompressed.array());
 
         ByteBuffer buffer = ByteBuffer.allocate(CompressedHeader.COMPRESSED_HEADER_LENGTH + compressed.length);
         buffer.order(ByteOrder.LITTLE_ENDIAN);
         buffer.putInt(1);           // originalOpcode = OP_REPLY
         buffer.putInt(UNCOMPRESSED_REPLY_HEADER_LENGTH); // uncompressedSize
-        buffer.put((byte) 2);       // compressorId = zlib
+        buffer.put(snappy ? (byte) 1 : (byte) 2);
         buffer.put(compressed);
         ((Buffer) buffer).flip();
 
