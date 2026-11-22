@@ -37,18 +37,27 @@ class SnappyCompressor extends Compressor {
         return 1;
     }
 
-    // the server does not support the framing format so SnappyFramedOutputStream can't be used.  The entire source message must first
-    // be copied into a single byte array.  For that reason the compress method defined in the base class can't be used.
+    // OP_COMPRESSED carries a single raw Snappy block.
     @Override
     public void compress(final List<ByteBuf> source, final BsonOutput target) {
-        int uncompressedSize = getUncompressedSize(source);
+        if (source.size() == 1 && source.get(0).isBackedByArray()) {
+            ByteBuf buffer = source.get(0);
+            int offset = buffer.arrayOffset() + buffer.position();
+            int length = buffer.remaining();
+            buffer.position(buffer.limit());
+            compress(buffer.array(), offset, length, target);
+        } else {
+            int uncompressedSize = getUncompressedSize(source);
+            byte[] singleByteArraySource = new byte[uncompressedSize];
+            copy(source, singleByteArraySource);
+            compress(singleByteArraySource, 0, uncompressedSize, target);
+        }
+    }
 
-        byte[] singleByteArraySource = new byte[uncompressedSize];
-        copy(source, singleByteArraySource);
-
+    private static void compress(final byte[] singleByteArraySource, final int offset, final int uncompressedSize, final BsonOutput target) {
         try {
             byte[] out = new byte[Snappy.maxCompressedLength(uncompressedSize)];
-            int compressedSize = Snappy.compress(singleByteArraySource, 0, singleByteArraySource.length, out, 0);
+            int compressedSize = Snappy.compress(singleByteArraySource, offset, uncompressedSize, out, 0);
             target.writeBytes(out, 0, compressedSize);
         } catch (IOException e) {
             throw new MongoInternalException("Unexpected IOException", e);
