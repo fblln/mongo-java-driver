@@ -125,6 +125,15 @@ class SnappyCompressor extends Compressor {
         return uncompressedSize;
     }
 
+    private static void consumeIntoArray(final List<ByteBuf> source, final byte[] in) {
+        int offset = 0;
+        for (ByteBuf cur : source) {
+            int remaining = cur.remaining();
+            cur.get(in, offset, remaining);
+            offset += remaining;
+        }
+    }
+
     @Override
     void uncompress(final ByteBuf source, final ByteBuf target) {
         int expected = target.remaining();

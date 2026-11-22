@@ -43,7 +43,6 @@ dependencies {
 
     implementation(libs.logback.classic)
     implementation(libs.snappy.java)
-    runtimeOnly(libs.zstd.jni)
     implementation(libs.jmh.core)
     annotationProcessor(libs.jmh.generator.annprocess)
 

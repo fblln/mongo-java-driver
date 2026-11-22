@@ -20,8 +20,11 @@ import com.mongodb.MongoInternalException;
 import org.bson.ByteBuf;
 import org.bson.io.BsonOutput;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.UnsupportedEncodingException;
 import java.util.List;
 
 abstract class Compressor {
@@ -32,15 +35,23 @@ abstract class Compressor {
 
     abstract byte getId();
 
-    abstract void compress(List<ByteBuf> source, BsonOutput target);
+    void compress(final List<ByteBuf> source, final BsonOutput target) {
+        BufferExposingByteArrayOutputStream baos = new BufferExposingByteArrayOutputStream(1024);
+        try (OutputStream outputStream = getOutputStream(baos)) {
+            byte[] scratch = new byte[BUFFER_SIZE];
+            for (ByteBuf cur : source) {
+                while (cur.hasRemaining()) {
+                    int numBytes = Math.min(cur.remaining(), scratch.length);
+                    cur.get(scratch, 0, numBytes);
+                    outputStream.write(scratch, 0, numBytes);
+                }
+            }
 
-    static void consumeIntoArray(final List<ByteBuf> source, final byte[] in) {
-        int offset = 0;
-        for (ByteBuf cur : source) {
-            int remaining = cur.remaining();
-            cur.get(in, offset, remaining);
-            offset += remaining;
+        } catch (IOException e) {
+            throw new MongoInternalException("Unexpected IOException", e);
         }
+        // ignore
+        target.writeBytes(baos.getInternalBytes(), 0, baos.size());
     }
 
     void uncompress(final ByteBuf source, final ByteBuf target) {
@@ -56,6 +67,11 @@ abstract class Compressor {
             throw new MongoInternalException("Unexpected IOException", e);
         }
         // ignore
+    }
+
+    // override this if not overriding the compress method
+    OutputStream getOutputStream(final OutputStream source) throws IOException {
+        throw new UnsupportedEncodingException();
     }
 
     // override this if not overriding the uncompress method
@@ -84,6 +100,17 @@ abstract class Compressor {
         @Override
         public int read() {
             throw new UnsupportedOperationException();
+        }
+    }
+
+    // Just so we don't have to copy the buffer
+    private static final class BufferExposingByteArrayOutputStream extends ByteArrayOutputStream {
+        BufferExposingByteArrayOutputStream(final int size) {
+            super(size);
+        }
+
+        byte[] getInternalBytes() {
+            return buf;
         }
     }
 }
