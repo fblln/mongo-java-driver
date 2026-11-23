@@ -45,20 +45,27 @@ class SnappyCompressor extends Compressor {
             int offset = buffer.arrayOffset() + buffer.position();
             int length = buffer.remaining();
             buffer.position(buffer.limit());
-            compress(buffer.array(), offset, length, target);
+            byte[] out = new byte[Snappy.maxCompressedLength(length)];
+            target.writeBytes(out, 0, compress(buffer.array(), offset, length, out));
         } else {
             int uncompressedSize = getUncompressedSize(source);
-            byte[] singleByteArraySource = new byte[uncompressedSize];
-            copy(source, singleByteArraySource);
-            compress(singleByteArraySource, 0, uncompressedSize, target);
+            ByteBuf singleByteArraySource = PowerOfTwoBufferPool.DEFAULT.getBuffer(uncompressedSize);
+            ByteBuf out = PowerOfTwoBufferPool.DEFAULT.getBuffer(Snappy.maxCompressedLength(uncompressedSize));
+            try {
+                copy(source, singleByteArraySource.array());
+                target.writeBytes(out.array(), 0,
+                        compress(singleByteArraySource.array(), 0, uncompressedSize, out.array()));
+            } finally {
+                singleByteArraySource.release();
+                out.release();
+            }
         }
     }
 
-    private static void compress(final byte[] singleByteArraySource, final int offset, final int uncompressedSize, final BsonOutput target) {
+    private static int compress(final byte[] singleByteArraySource, final int offset, final int uncompressedSize,
+                                final byte[] out) {
         try {
-            byte[] out = new byte[Snappy.maxCompressedLength(uncompressedSize)];
-            int compressedSize = Snappy.compress(singleByteArraySource, offset, uncompressedSize, out, 0);
-            target.writeBytes(out, 0, compressedSize);
+            return Snappy.compress(singleByteArraySource, offset, uncompressedSize, out, 0);
         } catch (IOException e) {
             throw new MongoInternalException("Unexpected IOException", e);
         }
